@@ -30,9 +30,9 @@ def parse_scale_verified_final(text):
     cleaned_lines = []
     for line in text.split('\n'):
         if "'" in line:
-            line = line.split("'")[0]
+            line = line.split("'")
         if "media" in line.lower():
-            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)[0]
+            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)
         line_strip = line.strip()
         if line_strip:
             cleaned_lines.append(line_strip)
@@ -61,7 +61,7 @@ def parse_scale_verified_final(text):
 
     def get_clean_numbers(line_str):
         parts = re.split(r"origin|rotate", line_str, re.IGNORECASE)
-        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts[0])]
+        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts)]
 
     def process_shape(shape_type, nums, h_ox, h_oy, h_oz, l_ox, l_oy, l_oz):
         # Суммируем смещения от hole и локального origin
@@ -72,13 +72,13 @@ def parse_scale_verified_final(text):
         if shape_type == 'cuboid' and len(nums) >= 7:
             coords = nums[1:] # берем все числа после ID материала до самого конца
             if len(coords) >= 6:
-                x_coords.update([round(coords[0] + total_x, 2), round(coords[1] + total_x, 2)])
-                y_coords.update([round(coords[2] + total_y, 2), round(coords[3] + total_y, 2)])
-                z_coords.update([round(coords[4] + total_z, 2), round(coords[5] + total_z, 2)])
+                x_coords.update([round(coords + total_x, 2), round(coords + total_x, 2)])
+                y_coords.update([round(coords + total_y, 2), round(coords + total_y, 2)])
+                z_coords.update([round(coords + total_z, 2), round(coords + total_z, 2)])
             
         elif shape_type == 'cylinder' and len(nums) >= 4:
             # Если чисел 4, первое — это ID цилиндра. Берём параметры со 2-го числа.
-            r, h_max, h_min = nums[1], nums[2], nums[3]
+            r, h_max, h_min = nums, nums, nums
             
             # Цилиндры стоят вертикально (ось Z): радиус расходится в X и Y, высоты — в Z
             x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
@@ -87,7 +87,7 @@ def parse_scale_verified_final(text):
                 
         elif shape_type == 'sphere' and len(nums) >= 2:
             # Первое число — ID сферы, второе — радиус
-            r = nums[1]
+            r = nums
             x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
             y_coords.update([round(total_y + r, 2), round(total_y - r, 2)])
             z_coords.update([round(total_z + r, 2), round(total_z - r, 2)])
@@ -146,15 +146,16 @@ if geo_text:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
     else:
         result = "    gridGeometry 2\n"
+        # Исправлено: форматирование крайних точек строк строго до сотых долей (.2f)
         if x_s:
-            result += f"        xlinear {len(x_s)} {x_s[0]} {x_s[-1]}\n"
-            result += f"             xplanes {' '.join(map(str, x_s))} end\n"
+            result += f"        xlinear {len(x_s)} {x_s[0]:.2f} {x_s[-1]:.2f}\n"
+            result += f"             xplanes {' '.join(f'{val:.2f}' for val in x_s)} end\n"
         if y_s:
-            result += f"        ylinear {len(y_s)} {y_s[0]} {y_s[-1]}\n"
-            result += f"             yplanes {' '.join(map(str, y_s))} end\n"
+            result += f"        ylinear {len(y_s)} {y_s[0]:.2f} {y_s[-1]:.2f}\n"
+            result += f"             yplanes {' '.join(f'{val:.2f}' for val in y_s)} end\n"
         if z_s:
-            result += f"        zlinear {len(z_s)} {z_s[0]} {z_s[-1]}\n"
-            result += f"             zplanes {' '.join(map(str, z_s))} end\n"
+            result += f"        zlinear {len(z_s)} {z_s[0]:.2f} {z_s[-1]:.2f}\n"
+            result += f"             zplanes {' '.join(f'{val:.2f}' for val in z_s)} end\n"
         result += "    end gridGeometry"
         
         st.subheader("Результат:")
