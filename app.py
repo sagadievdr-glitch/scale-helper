@@ -10,13 +10,13 @@ placeholder_text = (
     "  cuboid 1000 5000 0.0 2600 0.0 830.0 -470.0\n"
     "  hole 6 Origin x=1241 y=340 z=420\n"
     "unit 6\n"
-    "  cuboid 10 0 60 0 200 0\n"
+    "  cuboid 1 10 0 60 0 200 0\n"
     "end geometry"
 )
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_verified(text):
+def parse_scale_clean_final(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
@@ -34,13 +34,17 @@ def parse_scale_verified(text):
 
     # Шаг 1: Сбор всей базы геометрии по юнитам
     for line in lines:
+        # Убираем комментарии SCALE (все, что после одиночной кавычки)
+        if "'" in line:
+            line = line.split("'")[0]
+            
         line_clean = line.strip()
         line_lower = line_clean.lower()
         
-        if not line_clean or line_clean.startswith("'") or "read geometry" in line_lower or "end geometry" in line_lower:
+        if not line_clean or "read geometry" in line_lower or "end geometry" in line_lower:
             continue
             
-        # Улучшенное распознавание юнитов (включая "global unit X")
+        # Распознаем юниты (даже если строка содержит текст)
         if "unit" in line_lower:
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
@@ -55,6 +59,8 @@ def parse_scale_verified(text):
             continue
             
         ox, oy, oz = extract_origin(line_lower)
+        
+        # Вырезаем только ту часть строки, где заданы размеры фигуры (до параметров media/origin/rotate)
         clean_line = re.split(r"origin|rotate|media", line_lower)[0]
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", clean_line)]
         
@@ -65,17 +71,20 @@ def parse_scale_verified(text):
         unit_storage.setdefault(u_key, [])
 
         if "cuboid" in line_lower:
-            # Умное отсечение ID материала: если чисел 7 или больше, первое — это ID. Если 6 — это чистые координаты.
+            # Если чисел 7 или больше, первое число — это ID кубоида, отбрасываем его
             coords_only = numbers[1:] if len(numbers) >= 7 else numbers
             if len(coords_only) >= 6:
                 unit_storage[u_key].append({'type': 'cuboid', 'data': coords_only[:6], 'offset': (ox, oy, oz)})
+                
         elif "cylinder" in line_lower and len(numbers) >= 4:
             axis = 'z'
-            if 'x' in line_lower.split('cylinder')[1]: axis = 'x'
-            elif 'y' in line_lower.split('cylinder')[1]: axis = 'y'
+            if 'x' in line_lower.split('cylinder')[0]: axis = 'x'
+            elif 'y' in line_lower.split('cylinder')[0]: axis = 'y'
             unit_storage[u_key].append({'type': 'cylinder', 'data': {'axis': axis, 'r': numbers[1], 'h_max': numbers[2], 'h_min': numbers[3]}, 'offset': (ox, oy, oz)})
+            
         elif "sphere" in line_lower and len(numbers) >= 2:
             unit_storage[u_key].append({'type': 'sphere', 'data': numbers[1], 'offset': (ox, oy, oz)})
+            
         elif "hole" in line_lower:
             hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_id_match:
@@ -108,7 +117,7 @@ def parse_scale_verified(text):
             y_coords.update([round(total_oy + r, 1), round(total_oy - r, 1)])
             z_coords.update([round(total_oz + r, 1), round(total_oz - r, 1)])
 
-    # Шаг 3: Рекурсивный обход дерева юнитов
+    # Шаг 3: Рекурсивный обход дерева юнитов строго от корня
     def deploy_unit(u_id, current_offset=(0.0, 0.0, 0.0)):
         if u_id not in unit_storage:
             return
@@ -124,9 +133,8 @@ def parse_scale_verified(text):
             elif obj['type'] == 'hole':
                 deploy_unit(obj['data'], (total_ox, total_oy, total_oz))
 
-    # Если global unit не задан явно, берем unit 1
     if root_unit_id is None:
-        root_unit_id = 1 if 1 in unit_storage else (list(unit_storage.keys())[0] if unit_storage else None)
+        root_unit_id = 1 if 1 in unit_storage else (list(unit_storage.keys()) if unit_storage else None)
         
     if root_unit_id is not None:
         deploy_unit(root_unit_id)
@@ -134,7 +142,7 @@ def parse_scale_verified(text):
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_verified(geo_text)
+    x_s, y_s, z_s = parse_scale_clean_final(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
