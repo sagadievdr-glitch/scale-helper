@@ -16,7 +16,7 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_raw(text):
+def parse_scale_raw_fixed(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
@@ -26,7 +26,6 @@ def parse_scale_raw(text):
     root_unit_id = 1
     current_unit = None
     
-    # Регулярные выражения для поиска смещений
     def get_val(line_str, pattern):
         match = re.search(pattern, line_str, re.IGNORECASE)
         return float(match.group(1)) if match else 0.0
@@ -67,18 +66,17 @@ def parse_scale_raw(text):
             continue
             
         if "cuboid" in line_lower:
-            # Отрезаем ID кубоида, если параметров больше 6
             coords = numbers[1:] if len(numbers) >= 7 else numbers
             if len(coords) >= 6:
                 unit_storage[u_key].append({
                     'type': 'cuboid',
-                    'data': [coords[0], coords[1], coords[2], coords[3], coords[4], coords[5]],
+                    'data': coords[:6],
                     'offset': (ox, oy, oz)
                 })
         elif "cylinder" in line_lower and len(numbers) >= 4:
             axis = 'z'
-            if 'x' in line_lower.split('cylinder')[0]: axis = 'x'
-            elif 'y' in line_lower.split('cylinder')[0]: axis = 'y'
+            if 'x' in line_lower.split('cylinder'): axis = 'x'
+            elif 'y' in line_lower.split('cylinder'): axis = 'y'
             unit_storage[u_key].append({
                 'type': 'cylinder',
                 'data': {'axis': axis, 'r': numbers[-3], 'h_max': numbers[-2], 'h_min': numbers[-1]},
@@ -113,6 +111,7 @@ def parse_scale_raw(text):
             
             if obj['type'] == 'cuboid':
                 d = obj['data']
+                # Извлекаем строго по индексам, чтобы не ломать сложение массивов
                 x_coords.update([round(d[0] + total_x, 1), round(d[1] + total_x, 1)])
                 y_coords.update([round(d[2] + total_oy, 1), round(d[3] + total_oy, 1)])
                 z_coords.update([round(d[4] + total_oz, 1), round(d[5] + total_oz, 1)])
@@ -136,7 +135,7 @@ def parse_scale_raw(text):
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_raw(geo_text)
+    x_s, y_s, z_s = parse_scale_raw_fixed(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
