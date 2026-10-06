@@ -4,7 +4,6 @@ import re
 st.set_page_config(page_title="SCALE GridGeometry Helper", layout="centered")
 st.title("Помощник SCALE: Из Geometry в GridGeometry")
 
-# 1. Возвращаем подсказку в окно ввода с наглядной структурой
 placeholder_text = (
     "read geometry\n"
     "unit 1\n"
@@ -17,27 +16,24 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_unlimited_units(text):
+def parse_scale_fixed_offsets(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
     lines = text.split('\n')
     
-    # Структуры для хранения данных
-    unit_bodies = {}  # Тела внутри юнитов: {unit_id: [ (type, numbers, local_origin), ... ]}
-    global_holes = []  # Список всех вызовов hole в основном пространстве или глобальном юните
-    
+    unit_bodies = {}  # {unit_id_int: [список элементов]}
+    global_elements = []
     current_unit = None
     
-    # Регулярные выражения для поиска origin
     def extract_origin(line_str):
         ox = float(re.search(r"origin\s+x=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+x=", line_str, re.IGNORECASE) else 0.0
         oy = float(re.search(r"origin\s+y=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+y=", line_str, re.IGNORECASE) else 0.0
         oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+z=", line_str, re.IGNORECASE) else 0.0
         return ox, oy, oz
 
-    # Шаг 1: Сканируем весь текст и собираем базу данных по ВСЕМ юнитам
+    # Шаг 1: Первичный сбор данных (заполняем базу юнитов)
     for line in lines:
         line_clean = line.strip()
         line_lower = line_clean.lower()
@@ -45,11 +41,10 @@ def parse_scale_unlimited_units(text):
         if not line_clean or line_clean.startswith("'") or "read geometry" in line_lower or "end geometry" in line_lower:
             continue
             
-        # Отслеживаем объявление юнитов
         if line_lower.startswith("unit"):
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
-                current_unit = nums[0]
+                current_unit = nums[0]  # Извлекаем как число, а не список
                 if current_unit not in unit_bodies:
                     unit_bodies[current_unit] = []
             continue
@@ -57,7 +52,6 @@ def parse_scale_unlimited_units(text):
             current_unit = None
             continue
             
-        # Сбор геометрических тел или hole внутри юнитов или глобально
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", line_lower)]
         
         if "cuboid" in line_lower:
@@ -65,8 +59,7 @@ def parse_scale_unlimited_units(text):
             if current_unit is not None:
                 unit_bodies[current_unit].append(('cuboid', numbers, (ox, oy, oz)))
             else:
-                # Если cuboid объявлен вне юнитов (в глобальном пространстве)
-                unit_bodies.setdefault(0, []).append(('cuboid', numbers, (ox, oy, oz)))
+                global_elements.append(('cuboid', numbers, (ox, oy, oz)))
                 
         elif "hole" in line_lower:
             hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
@@ -74,12 +67,10 @@ def parse_scale_unlimited_units(text):
                 h_id = int(hole_id_match.group(1))
                 ox, oy, oz = extract_origin(line_lower)
                 if current_unit is not None:
-                    # Запоминаем, что текущий юнит ссылается на другой юнит через hole
                     unit_bodies[current_unit].append(('hole', h_id, (ox, oy, oz)))
                 else:
-                    global_holes.append((h_id, (ox, oy, oz)))
+                    global_elements.append(('hole', h_id, (ox, oy, oz)))
 
-    # Функция для добавления координат кубоида со смещениями
     def add_cuboid_coords(numbers, total_ox, total_oy, total_oz):
         if len(numbers) < 7:
             return
@@ -95,7 +86,7 @@ def parse_scale_unlimited_units(text):
         y_coords.update([round(y_max, 1), round(y_min, 1)])
         z_coords.update([round(z_max, 1), round(z_min, 1)])
 
-    # Шаг 2: Рекурсивный обход юнитов для раскрытия всех вложенностей hole
+    # Шаг 2: Рекурсивная функция раскрытия юнитов
     def process_unit(u_id, accumulated_origin=(0.0, 0.0, 0.0)):
         if u_id not in unit_bodies:
             return
@@ -111,29 +102,28 @@ def parse_scale_unlimited_units(text):
             if item_type == 'cuboid':
                 add_cuboid_coords(data, total_ox, total_oy, total_oz)
             elif item_type == 'hole':
-                # Рекурсивно заходим в дочерний юнит hole, передавая накопленное смещение
-                child_unit_id = data
-                process_unit(child_unit_id, (total_ox, total_oy, total_oz))
+                process_unit(data, (total_ox, total_oy, total_oz))
 
-    # Шаг 3: Запускаем расчет для всех глобальных объектов и базовых юнитов
-    # Сначала обрабатываем глобальный виртуальный юнит 0, если он есть
-    if 0 in unit_bodies:
-        process_unit(0)
-        
-    # Обрабатываем глобальные hole
-    for h_id, h_orig in global_holes:
-        process_unit(h_id, h_orig)
-        
-    # Для надежности: если какие-то юниты не были вызваны через hole, но они есть в файле, 
-    # добавим их локальные координаты (как базовые опорные точки)
-    for u_id in unit_bodies.keys():
-        if u_id != 0:
-            process_unit(u_id)
+    # Шаг 3: Запуск сборки координат строго по иерархии
+    # Обрабатываем глобальные элементы, если они объявлены вне юнитов
+    for item_type, data, local_orig in global_elements:
+        if item_type == 'cuboid':
+            add_cuboid_coords(data, local_orig[0], local_orig[1], local_orig[2])
+        elif item_type == 'hole':
+            process_unit(data, local_orig)
+            
+    # Запускаем расчет от главного юнита (обычно это unit 1 в SCALE)
+    if 1 in unit_bodies:
+        process_unit(1)
+    elif unit_bodies:
+        # Если unit 1 нет, берем первый попавшийся объявленный юнит в качестве корневого
+        first_unit = list(unit_bodies.keys())[0]
+        process_unit(first_unit)
 
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_unlimited_units(geo_text)
+    x_s, y_s, z_s = parse_scale_fixed_offsets(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
@@ -154,3 +144,4 @@ if geo_text:
         
         st.subheader("Результат:")
         st.code(result, language="text")
+
