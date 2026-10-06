@@ -16,12 +16,11 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_verified_final(text):
+def parse_scale_precise_shapes(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
-    # Исправленный поиск параметров осей: ищем число строго после знака равенства
     def get_axis_val(line_str, prefix):
         match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
         return float(match.group(1)) if match else None
@@ -37,7 +36,7 @@ def parse_scale_verified_final(text):
         if line_strip:
             cleaned_lines.append(line_strip)
 
-    # Шаг 2. Распил текста на блоки юнитов и глобальную часть
+    # Шаг 2. Распил текста на блоки юнитов
     global_lines = []
     unit_blocks = {}
     current_unit_id = None
@@ -61,50 +60,44 @@ def parse_scale_verified_final(text):
 
     def get_clean_numbers(line_str):
         parts = re.split(r"origin|rotate", line_str, re.IGNORECASE)
-        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts[0])]
+        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts)]
 
-    def process_shape(shape_type, nums, h_ox, h_oy, h_oz, l_ox, l_oy, l_oz):
-        # Суммируем смещения от hole и локального origin
-        total_x = h_ox + l_ox
-        total_y = h_oy + l_oy
-        total_z = h_oz + l_oz
-        
-        if shape_type == 'cuboid' and len(nums) >= 7:
-            coords = nums[1:] # Исправлено: берем все числа после ID материала до самого конца
-            if len(coords) >= 6:
-                x_coords.update([round(coords[0] + total_x, 1), round(coords[1] + total_x, 1)])
-                y_coords.update([round(coords[2] + total_y, 1), round(coords[3] + total_y, 1)])
-                z_coords.update([round(coords[4] + total_z, 1), round(coords[5] + total_z, 1)])
-            
-        elif shape_type == 'cylinder' and len(nums) >= 4:
-            r, h_max, h_min = nums[1], nums[2], nums[3]
-            axis = 'z'
-            if 'x' in shape_type: axis = 'x'
-            elif 'y' in shape_type: axis = 'y'
-            
-            if axis == 'z':
-                x_coords.update([round(total_x + r, 1), round(total_x - r, 1)])
-                y_coords.update([round(total_y + r, 1), round(total_y - r, 1)])
-                z_coords.update([round(h_max + total_z, 1), round(h_min + total_z, 1)])
-            elif axis == 'x':
-                x_coords.update([round(h_max + total_x, 1), round(h_min + total_x, 1)])
-                y_coords.update([round(total_y + r, 1), round(total_y - r, 1)])
-                z_coords.update([round(total_z + r, 1), round(total_z - r, 1)])
-            elif axis == 'y':
-                x_coords.update([round(total_x + r, 1), round(total_x - r, 1)])
-                y_coords.update([round(h_max + total_y, 1), round(h_min + total_y, 1)])
-                z_coords.update([round(total_z + r, 1), round(total_z - r, 1)])
-                
-        elif shape_type == 'sphere' and len(nums) >= 2:
+    # Точность расчетов изменена до сотых долей (round(..., 2))
+    def add_cuboid(nums, tx, ty, tz):
+        coords = nums[1:] if len(nums) >= 7 else numbers
+        if len(coords) >= 6:
+            x_coords.update([round(coords[0] + tx, 2), round(coords[1] + tx, 2)])
+            y_coords.update([round(coords[2] + ty, 2), round(coords[3] + ty, 2)])
+            z_coords.update([round(coords[4] + tz, 2), round(coords[5] + tz, 2)])
+
+    def add_cylinder(nums, is_x, is_y, tx, ty, tz):
+        if len(nums) >= 4:
             r = nums[1]
-            x_coords.update([round(total_x + r, 1), round(total_x - r, 1)])
-            y_coords.update([round(total_y + r, 1), round(total_y - r, 1)])
-            z_coords.update([round(total_z + r, 1), round(total_z - r, 1)])
+            h_max = nums[2]
+            h_min = nums[3]
+            
+            if not is_x and not is_y: # Ось Z
+                x_coords.update([round(tx + r, 2), round(tx - r, 2)])
+                y_coords.update([round(ty + r, 2), round(ty - r, 2)])
+                z_coords.update([round(h_max + tz, 2), round(h_min + tz, 2)])
+            elif is_x:
+                x_coords.update([round(h_max + tx, 2), round(h_min + tx, 2)])
+                y_coords.update([round(ty + r, 2), round(ty - r, 2)])
+                z_coords.update([round(tz + r, 2), round(tz - r, 2)])
+            elif is_y:
+                x_coords.update([round(tx + r, 2), round(tx - r, 2)])
+                y_coords.update([round(h_max + ty, 2), round(h_min + ty, 2)])
+                z_coords.update([round(tz + r, 2), round(tz - r, 2)])
 
-    # Шаг 3. Обработка глобальных линий и раскрытие hole
-    for line in global_lines:
+    def add_sphere(nums, tx, ty, tz):
+        if len(nums) >= 2:
+            r = nums[1]
+            x_coords.update([round(tx + r, 2), round(tx - r, 2)])
+            y_coords.update([round(ty + r, 2), round(ty - r, 2)])
+            z_coords.update([round(tz + r, 2), round(tz - r, 2)])
+
+    def parse_line_elements(line, h_ox, h_oy, h_oz):
         line_lower = line.lower()
-        
         val_x = get_axis_val(line_lower, 'x')
         val_y = get_axis_val(line_lower, 'y')
         val_z = get_axis_val(line_lower, 'z')
@@ -113,43 +106,30 @@ def parse_scale_verified_final(text):
         l_oy = val_y if val_y is not None else 0.0
         l_oz = val_z if val_z is not None else 0.0
         
+        tx, ty, tz = h_ox + l_ox, h_oy + l_oy, h_oz + l_oz
         nums = get_clean_numbers(line)
         
         if "cuboid" in line_lower:
-            process_shape('cuboid', nums, 0, 0, 0, l_ox, l_oy, l_oz)
+            add_cuboid(nums, tx, ty, tz)
         elif "cylinder" in line_lower:
-            process_shape('cylinder', nums, 0, 0, 0, l_ox, l_oy, l_oz)
+            add_cylinder(nums, 'x' in line_lower, 'y' in line_lower, tx, ty, tz)
         elif "sphere" in line_lower:
-            process_shape('sphere', nums, 0, 0, 0, l_ox, l_oy, l_oz)
-            
+            add_sphere(nums, tx, ty, tz)
         elif "hole" in line_lower:
             hole_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_match:
                 h_id = int(hole_match.group(1))
                 if h_id in unit_blocks:
                     for u_line in unit_blocks[h_id]:
-                        u_line_lower = u_line.lower()
-                        
-                        u_val_x = get_axis_val(u_line_lower, 'x')
-                        u_val_y = get_axis_val(u_line_lower, 'y')
-                        u_val_z = get_axis_val(u_line_lower, 'z')
-                        
-                        loc_ox = u_val_x if u_val_x is not None else 0.0
-                        loc_oy = u_val_y if u_val_y is not None else 0.0
-                        loc_oz = u_val_z if u_val_z is not None else 0.0
-                        
-                        u_nums = get_clean_numbers(u_line)
-                        if "cuboid" in u_line_lower:
-                            process_shape('cuboid', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
-                        elif "cylinder" in u_line_lower:
-                            process_shape('cylinder', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
-                        elif "sphere" in u_line_lower:
-                            process_shape('sphere', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
+                        parse_line_elements(u_line, tx, ty, tz)
+
+    for line in global_lines:
+        parse_line_elements(line, 0, 0, 0)
 
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_verified_final(geo_text)
+    x_s, y_s, z_s = parse_scale_precise_shapes(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
@@ -168,3 +148,4 @@ if geo_text:
         
         st.subheader("Результат:")
         st.code(result, language="text")
+
