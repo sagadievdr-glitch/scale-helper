@@ -25,7 +25,7 @@ def parse_scale_verified_final(text):
         match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
         return float(match.group(1)) if match else None
 
-    # Шаг 1. Очистка от комментариев и блоков media (с жестким сохранением типа ТЕКСТ)
+    # Шаг 1. Очистка от комментариев и блоков media
     cleaned_lines = []
     for line in text.split('\n'):
         if "'" in line:
@@ -143,12 +143,16 @@ if geo_text:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
     else:
         result = "    gridGeometry 2\n"
+        # Восстановлен правильный формат xlinear/xplanes с округлением до сотых (.2f)
         if x_s:
-            result += f"        xgrid = {' '.join(f'{val:.2f}' for val in x_s)}\n"
+            result += f"        xlinear {len(x_s)} {x_s[0]:.2f} {x_s[-1]:.2f}\n"
+            result += f"             xplanes {' '.join(f'{val:.2f}' for val in x_s)} end\n"
         if y_s:
-            result += f"        ygrid = {' '.join(f'{val:.2f}' for val in y_s)}\n"
+            result += f"        ylinear {len(y_s)} {y_s[0]:.2f} {y_s[-1]:.2f}\n"
+            result += f"             yplanes {' '.join(f'{val:.2f}' for val in y_s)} end\n"
         if z_s:
-            result += f"        zgrid = {' '.join(f'{val:.2f}' for val in z_s)}\n"
+            result += f"        zlinear {len(z_s)} {z_s[0]:.2f} {z_s[-1]:.2f}\n"
+            result += f"             zplanes {' '.join(f'{val:.2f}' for val in z_s)} end\n"
         result += "    end gridGeometry"
         
         st.subheader("Результат:")
