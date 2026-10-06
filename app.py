@@ -16,15 +16,15 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_final_fixed(text):
+def parse_scale_verified_final(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
-    # Исправленный поиск осей: ищем просто имя координаты после границы слова \b
+    # Исправленный поиск параметров осей: ищем число строго после знака равенства
     def get_axis_val(line_str, prefix):
-        match = re.search(r"\b" + prefix + r"=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
-        return float(match.group(1)) if match else 0.0
+        match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
+        return float(match.group(1)) if match else None
 
     # Шаг 1. Очистка от комментариев и блоков media
     cleaned_lines = []
@@ -37,7 +37,7 @@ def parse_scale_final_fixed(text):
         if line_strip:
             cleaned_lines.append(line_strip)
 
-    # Шаг 2. Предварительный сбор ВСЕХ юнитов в файле
+    # Шаг 2. Распил текста на блоки юнитов и глобальную часть
     global_lines = []
     unit_blocks = {}
     current_unit_id = None
@@ -64,15 +64,17 @@ def parse_scale_final_fixed(text):
         return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts[0])]
 
     def process_shape(shape_type, nums, h_ox, h_oy, h_oz, l_ox, l_oy, l_oz):
+        # Суммируем смещения от hole и локального origin
         total_x = h_ox + l_ox
         total_y = h_oy + l_oy
         total_z = h_oz + l_oz
         
         if shape_type == 'cuboid' and len(nums) >= 7:
-            coords = nums[1:7]
-            x_coords.update([round(coords[0] + total_x, 1), round(coords[1] + total_x, 1)])
-            y_coords.update([round(coords[2] + total_y, 1), round(coords[3] + total_y, 1)])
-            z_coords.update([round(coords[4] + total_z, 1), round(coords[5] + total_z, 1)])
+            coords = nums[1:] # Исправлено: берем все числа после ID материала до самого конца
+            if len(coords) >= 6:
+                x_coords.update([round(coords[0] + total_x, 1), round(coords[1] + total_x, 1)])
+                y_coords.update([round(coords[2] + total_y, 1), round(coords[3] + total_y, 1)])
+                z_coords.update([round(coords[4] + total_z, 1), round(coords[5] + total_z, 1)])
             
         elif shape_type == 'cylinder' and len(nums) >= 4:
             r, h_max, h_min = nums[1], nums[2], nums[3]
@@ -99,12 +101,17 @@ def parse_scale_final_fixed(text):
             y_coords.update([round(total_y + r, 1), round(total_y - r, 1)])
             z_coords.update([round(total_z + r, 1), round(total_z - r, 1)])
 
-    # Шаг 3. Финальный проход по глобальным линиям и раскрытие hole
+    # Шаг 3. Обработка глобальных линий и раскрытие hole
     for line in global_lines:
         line_lower = line.lower()
-        l_ox = get_axis_val(line_lower, 'x')
-        l_oy = get_axis_val(line_lower, 'y')
-        l_oz = get_axis_val(line_lower, 'z')
+        
+        val_x = get_axis_val(line_lower, 'x')
+        val_y = get_axis_val(line_lower, 'y')
+        val_z = get_axis_val(line_lower, 'z')
+        
+        l_ox = val_x if val_x is not None else 0.0
+        l_oy = val_y if val_y is not None else 0.0
+        l_oz = val_z if val_z is not None else 0.0
         
         nums = get_clean_numbers(line)
         
@@ -122,9 +129,14 @@ def parse_scale_final_fixed(text):
                 if h_id in unit_blocks:
                     for u_line in unit_blocks[h_id]:
                         u_line_lower = u_line.lower()
-                        loc_ox = get_axis_val(u_line_lower, 'x')
-                        loc_oy = get_axis_val(u_line_lower, 'y')
-                        loc_oz = get_axis_val(u_line_lower, 'z')
+                        
+                        u_val_x = get_axis_val(u_line_lower, 'x')
+                        u_val_y = get_axis_val(u_line_lower, 'y')
+                        u_val_z = get_axis_val(u_line_lower, 'z')
+                        
+                        loc_ox = u_val_x if u_val_x is not None else 0.0
+                        loc_oy = u_val_y if u_val_y is not None else 0.0
+                        loc_oz = u_val_z if u_val_z is not None else 0.0
                         
                         u_nums = get_clean_numbers(u_line)
                         if "cuboid" in u_line_lower:
@@ -137,7 +149,7 @@ def parse_scale_final_fixed(text):
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_final_fixed(geo_text)
+    x_s, y_s, z_s = parse_scale_verified_final(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
