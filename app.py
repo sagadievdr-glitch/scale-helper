@@ -1,83 +1,128 @@
 import streamlit as st
 import re
+import math
 
-# Настройка страницы чата
 st.set_page_config(page_title="SCALE GridGeometry Helper", page_icon="⚛️", layout="centered")
-
 st.title("⚛️ Помощник SCALE: Из Geometry в GridGeometry")
-st.write("Вставьте блок `geometry`, чтобы автоматически извлечь критические точки для сетки.")
+st.write("Парсер учитывает параметры **hole**, **origin** и **rotate** (поворот вокруг оси Z).")
 
-# Поле ввода текста (как в чате)
-geo_text = st.text_area("Вставьте блок geometry сюда:", height=250, placeholder="read geometry\n  cuboid 1 10.0 -10.0 5.0 -5.0 2.0 -2.0\nend geometry")
+geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder="unit 1\n  cuboid 102 10 0 135.4 0 383.5 0.0 rotate a1=-37.8 origin x=151 y=781\nhole 6 Origin x=646 y=100")
 
-if geo_text:
+def parse_geometry_advanced(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
-    lines = geo_text.split('\n')
+    # Сначала найдем все юниты (unit) и их содержимое
+    units = {}
+    current_unit = None
     
+    lines = text.split('\n')
     for line in lines:
-        line_lower = line.lower().strip()
-        if line_lower.startswith("'") or line_lower.startswith("read") or line_lower.startswith("end") or not line_lower:
+        line_clean = line.strip()
+        line_lower = line_clean.lower()
+        
+        if not line_clean or line_clean.startswith("'"):
             continue
             
-        # Поиск всех чисел (включая отрицательные и дробные)
-        numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", line)]
-        if not numbers:
+        # Фиксация текущего юнита
+        if line_lower.startswith("unit"):
+            nums = [int(n) for n in re.findall(r"\d+", line_lower)]
+            if nums:
+                current_unit = nums[0]
+                units[current_unit] = []
+            continue
+        elif line_lower.startswith("end") and "geometry" not in line_lower:
+            current_unit = None
             continue
             
-        # Базовый парсинг стандартных примитивов SCALE
-        if 'xplane' in line_lower:
-            x_coords.update(numbers)
-        elif 'yplane' in line_lower:
-            y_coords.update(numbers)
-        elif 'zplane' in line_lower:
-            z_coords.update(numbers)
-        elif 'cuboid' in line_lower or 'box' in line_lower:
-            if len(numbers) >= 6:
-                x_coords.update(numbers[-6:-4])
-                y_coords.update(numbers[-4:-2])
-                z_coords.update(numbers[-2:])
-        elif 'cylinder' in line_lower:
-            if 'z' in line_lower and len(numbers) >= 3:
-                r = numbers
-                x_coords.update([-r, r])
-                y_coords.update([-r, r])
-                z_coords.update(numbers[1:3])
-            elif 'x' in line_lower and len(numbers) >= 3:
-                r = numbers
-                y_coords.update([-r, r])
-                z_coords.update([-r, r])
-                x_coords.update(numbers[1:3])
-            elif 'y' in line_lower and len(numbers) >= 3:
-                r = numbers
-                x_coords.update([-r, r])
-                z_coords.update([-r, r])
-                y_coords.update(numbers[1:3])
-        elif 'sphere' in line_lower and len(numbers) >= 1:
-            r = numbers
-            x_coords.update([-r, r])
-            y_coords.update([-r, r])
-            z_coords.update([-r, r])
+        if current_unit is not None:
+            units[current_unit].append(line_clean)
+            
+    # Если юниты не оформлены явно, поместим всё в глобальный виртуальный юнит 0
+    if not units:
+        units[0] = [l.strip() for l in lines if l.strip() and not l.strip().startswith("'")]
 
-    # Сортировка уникальных координат
-    x_sorted = sorted(list(x_coords))
-    y_sorted = sorted(list(y_coords))
-    z_sorted = sorted(list(z_coords))
+    def process_cuboid(numbers, origin_x=0.0, origin_y=0.0, origin_z=0.0, angle_deg=0.0):
+        # cuboid обычно имеет минимум 6 координат после ID: x_max x_min y_max y_min z_max z_min
+        # В SCALE: cuboid ID +x -x +y -y +z -z
+        if len(numbers) < 7:
+            return
+        
+        x_max, x_min = numbers[1], numbers[2]
+        y_max, y_min = numbers[3], numbers[4]
+        z_max, z_min = numbers[5], numbers[6]
+        
+        # 4 базовые вершины в плоскости XY для учета поворота
+        vertices = [
+            (x_min, y_min),
+            (x_max, y_min),
+            (x_max, y_max),
+            (x_min, y_max)
+        ]
+        
+        rad = math.radians(angle_deg)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+        
+        # Вращаем и смещаем вершины
+        for vx, vy in vertices:
+            # Матрица поворота вокруг Z (обычно a1 в SCALE — это угол на плоскости XY)
+            rx = vx * cos_a - vy * sin_a + origin_x
+            ry = vx * sin_a + vy * cos_a + origin_y
+            x_coords.add(round(rx, 2))
+            y_coords.add(round(ry, 2))
+            
+        # Z просто смещается по origin
+        z_coords.add(round(z_min + origin_z, 2))
+        z_coords.add(round(z_max + origin_z, 2))
+
+    # Парсим основной блок построчно
+    for line in lines:
+        line_lower = line.strip().lower()
+        if not line_lower or line_lower.startswith("'") or "read" in line_lower or "end" in line_lower:
+            continue
+            
+        # Извлекаем все числа из строки (включая отрицательные и дробные)
+        numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", line_lower)]
+        
+        # Ищем параметры смещения и вращения
+        ox = float(re.search(r"origin\s+x=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+x=", line_lower) else 0.0
+        oy = float(re.search(r"origin\s+y=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+y=", line_lower) else 0.0
+        oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+z=", line_lower) else 0.0
+        
+        # Угол rotate a1=...
+        angle = float(re.search(r"rotate\s+a1=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"rotate\s+a1=", line_lower) else 0.0
+
+        if "cuboid" in line_lower:
+            process_cuboid(numbers, ox, oy, oz, angle)
+            
+        elif "hole" in line_lower:
+            # Формат: hole H_ID Origin x=... y=... z=...
+            hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
+            if hole_id_match:
+                h_id = int(hole_id_match.group(1))
+                if h_id in units:
+                    # Проходим по внутренностям юнита, который вызван как hole
+                    for u_line in units[h_id]:
+                        u_line_lower = u_line.lower()
+                        u_numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", u_line_lower)]
+                        if "cuboid" in u_line_lower:
+                            process_cuboid(u_numbers, ox, oy, oz, angle)
+
+    return sorted(list(x_coords)), sorted(list(y_coords)), sorted(list(z_coords))
+
+if geo_text:
+    x_s, y_s, z_s = parse_geometry_advanced(geo_text)
     
-    if not x_sorted and not y_sorted and not z_sorted:
-        st.warning("⚠️ Не удалось распознать геометрические тела. Проверьте формат ввода.")
+    if not x_s and not y_s and not z_s:
+        st.warning("⚠️ Не удалось распознать геометрию. Проверьте синтаксис тел.")
     else:
-        # Сборка блока gridGeometry
         result = "read gridGeometry\n"
-        if x_sorted:
-            result += f"  xgrid = {' '.join(map(str, x_sorted))}\n"
-        if y_sorted:
-            result += f"  ygrid = {' '.join(map(str, y_sorted))}\n"
-        if z_sorted:
-            result += f"  zgrid = {' '.join(map(str, z_sorted))}\n"
+        if x_s: result += f"  xgrid = {' '.join(map(str, x_s))}\n"
+        if y_s: result += f"  ygrid = {' '.join(map(str, y_s))}\n"
+        if z_s: result += f"  zgrid = {' '.join(map(str, z_s))}\n"
         result += "end gridGeometry"
         
-        st.subheader("Результат:")
+        st.subheader("Сгенерированный блок:")
         st.code(result, language="text")
