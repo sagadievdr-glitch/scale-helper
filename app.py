@@ -21,23 +21,25 @@ def parse_scale_verified_final(text):
     y_coords = set()
     z_coords = set()
     
-    # Исправленный поиск параметров осей: ищем число строго после знака равенства
     def get_axis_val(line_str, prefix):
         match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
         return float(match.group(1)) if match else None
 
-    # Шаг 1. Очистка от комментариев и блоков media
+    # Шаг 1. Очистка от комментариев и блоков media (с жестким сохранением типа ТЕКСТ)
     cleaned_lines = []
     for line in text.split('\n'):
         if "'" in line:
-            line = line.split("'")
-        if "media" in line.lower():
-            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)
+            line = line.split("'")[0]  # Берем только левую текстовую часть до кавычки
+            
+        line_lower = line.lower()
+        if "media" in line_lower:
+            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)[0]  # Берем левую часть до media
+            
         line_strip = line.strip()
         if line_strip:
             cleaned_lines.append(line_strip)
 
-    # Шаг 2. Распил текста на blocks юнитов и глобальную часть
+    # Шаг 2. Распил текста на блоки юнитов и глобальную часть
     global_lines = []
     unit_blocks = {}
     current_unit_id = None
@@ -64,29 +66,24 @@ def parse_scale_verified_final(text):
         return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts[0])]
 
     def process_shape(shape_type, nums, h_ox, h_oy, h_oz, l_ox, l_oy, l_oz):
-        # Суммируем смещения от hole и локального origin
         total_x = h_ox + l_ox
         total_y = h_oy + l_oy
         total_z = h_oz + l_oz
         
         if shape_type == 'cuboid' and len(nums) >= 7:
-            coords = nums[1:] # берем все числа после ID материала до самого конца
+            coords = nums[1:]
             if len(coords) >= 6:
                 x_coords.update([round(coords[0] + total_x, 2), round(coords[1] + total_x, 2)])
                 y_coords.update([round(coords[2] + total_y, 2), round(coords[3] + total_y, 2)])
                 z_coords.update([round(coords[4] + total_z, 2), round(coords[5] + total_z, 2)])
             
         elif shape_type == 'cylinder' and len(nums) >= 4:
-            # Если чисел 4, первое — это ID цилиндра. Берём параметры со 2-го числа.
             r, h_max, h_min = nums[1], nums[2], nums[3]
-            
-            # Цилиндры стоят вертикально (ось Z): радиус расходится в X и Y, высоты — в Z
             x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
             y_coords.update([round(total_y + r, 2), round(total_y - r, 2)])
             z_coords.update([round(h_max + total_z, 2), round(h_min + total_z, 2)])
                 
         elif shape_type == 'sphere' and len(nums) >= 2:
-            # Первое число — ID сферы, второе — радиус
             r = nums[1]
             x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
             y_coords.update([round(total_y + r, 2), round(total_y - r, 2)])
@@ -147,14 +144,11 @@ if geo_text:
     else:
         result = "    gridGeometry 2\n"
         if x_s:
-            result += f"        xlinear {len(x_s)} {x_s[0]:.2f} {x_s[-1]:.2f}\n"
-            result += f"             xplanes {' '.join(f'{val:.2f}' for val in x_s)} end\n"
+            result += f"        xgrid = {' '.join(f'{val:.2f}' for val in x_s)}\n"
         if y_s:
-            result += f"        ylinear {len(y_s)} {y_s[0]:.2f} {y_s[-1]:.2f}\n"
-            result += f"             yplanes {' '.join(f'{val:.2f}' for val in y_s)} end\n"
+            result += f"        ygrid = {' '.join(f'{val:.2f}' for val in y_s)}\n"
         if z_s:
-            result += f"        zlinear {len(z_s)} {z_s[0]:.2f} {z_s[-1]:.2f}\n"
-            result += f"             zplanes {' '.join(f'{val:.2f}' for val in z_s)} end\n"
+            result += f"        zgrid = {' '.join(f'{val:.2f}' for val in z_s)}\n"
         result += "    end gridGeometry"
         
         st.subheader("Результат:")
