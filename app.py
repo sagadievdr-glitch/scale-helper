@@ -2,8 +2,8 @@ import streamlit as st
 import re
 import math
 
-st.set_page_config(page_title="SCALE GridGeometry Helper", page_icon="⚛️", layout="centered")
-st.title("⚛️ Помощник SCALE: Из Geometry в GridGeometry")
+st.set_page_config(page_title="SCALE GridGeometry Helper", page_icon="", layout="centered")
+st.title("Помощник SCALE: Из Geometry в GridGeometry")
 st.write("Парсер учитывает параметры **hole**, **origin** и **rotate** (поворот вокруг оси Z).")
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder="unit 1\n  cuboid 102 10 0 135.4 0 383.5 0.0 rotate a1=-37.8 origin x=151 y=781\nhole 6 Origin x=646 y=100")
