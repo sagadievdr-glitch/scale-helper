@@ -1,19 +1,17 @@
 import streamlit as st
 import re
-import math
 
-st.set_page_config(page_title="SCALE GridGeometry Helper", page_icon="", layout="centered")
+st.set_page_config(page_title="SCALE GridGeometry Helper", layout="centered")
 st.title("Помощник SCALE: Из Geometry в GridGeometry")
-st.write("Парсер учитывает параметры **hole**, **origin** и **rotate** (поворот вокруг оси Z).")
 
-geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder="unit 1\n  cuboid 102 10 0 135.4 0 383.5 0.0 rotate a1=-37.8 origin x=151 y=781\nhole 6 Origin x=646 y=100")
+geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, 
+                        placeholder="read geometry\nunit 1\n  cuboid 102 10 0 135.4 0 383.5 0.0 rotate a1=-37.8 origin x=151 y=781\n  hole 6 Origin x=646 y=100\n\nunit 6\n  cuboid 1 10 0 60 0 200 0\nend geometry")
 
-def parse_geometry_advanced(text):
+def parse_scale_v2(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
-    # Сначала найдем все юниты (unit) и их содержимое
     units = {}
     current_unit = None
     
@@ -25,11 +23,10 @@ def parse_geometry_advanced(text):
         if not line_clean or line_clean.startswith("'"):
             continue
             
-        # Фиксация текущего юнита
         if line_lower.startswith("unit"):
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
-                current_unit = nums[0]
+                current_unit = nums
                 units[current_unit] = []
             continue
         elif line_lower.startswith("end") and "geometry" not in line_lower:
@@ -38,91 +35,69 @@ def parse_geometry_advanced(text):
             
         if current_unit is not None:
             units[current_unit].append(line_clean)
-            
-    # Если юниты не оформлены явно, поместим всё в глобальный виртуальный юнит 0
-    if not units:
-        units[0] = [l.strip() for l in lines if l.strip() and not l.strip().startswith("'")]
 
-    def process_cuboid(numbers, origin_x=0.0, origin_y=0.0, origin_z=0.0, angle_deg=0.0):
-        # cuboid обычно имеет минимум 6 координат после ID: x_max x_min y_max y_min z_max z_min
-        # В SCALE: cuboid ID +x -x +y -y +z -z
+    def get_origin(line_str):
+        ox = float(re.search(r"origin\s+x=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+x=", line_str, re.IGNORECASE) else 0.0
+        oy = float(re.search(r"origin\s+y=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+y=", line_str, re.IGNORECASE) else 0.0
+        oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+z=", line_str, re.IGNORECASE) else 0.0
+        return ox, oy, oz
+
+    def add_cuboid_coords(numbers, ox=0.0, oy=0.0, oz=0.0):
         if len(numbers) < 7:
             return
+        x_max, x_min = numbers + ox, numbers + ox
+        y_max, y_min = numbers + oy, numbers + oy
+        z_max, z_min = numbers + oz, numbers + oz
         
-        x_max, x_min = numbers[1], numbers[2]
-        y_max, y_min = numbers[3], numbers[4]
-        z_max, z_min = numbers[5], numbers[6]
-        
-        # 4 базовые вершины в плоскости XY для учета поворота
-        vertices = [
-            (x_min, y_min),
-            (x_max, y_min),
-            (x_max, y_max),
-            (x_min, y_max)
-        ]
-        
-        rad = math.radians(angle_deg)
-        cos_a = math.cos(rad)
-        sin_a = math.sin(rad)
-        
-        # Вращаем и смещаем вершины
-        for vx, vy in vertices:
-            # Матрица поворота вокруг Z (обычно a1 в SCALE — это угол на плоскости XY)
-            rx = vx * cos_a - vy * sin_a + origin_x
-            ry = vx * sin_a + vy * cos_a + origin_y
-            x_coords.add(round(rx, 2))
-            y_coords.add(round(ry, 2))
-            
-        # Z просто смещается по origin
-        z_coords.add(round(z_min + origin_z, 2))
-        z_coords.add(round(z_max + origin_z, 2))
+        x_coords.update([round(x_max, 1), round(x_min, 1)])
+        y_coords.update([round(y_max, 1), round(y_min, 1)])
+        z_coords.update([round(z_max, 1), round(z_min, 1)])
 
-    # Парсим основной блок построчно
     for line in lines:
         line_lower = line.strip().lower()
-        if not line_lower or line_lower.startswith("'") or "read" in line_lower or "end" in line_lower:
+        if not line_lower or line_lower.startswith("'") or "read geometry" in line_lower or "end geometry" in line_lower:
             continue
             
-        # Извлекаем все числа из строки (включая отрицательные и дробные)
         numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", line_lower)]
         
-        # Ищем параметры смещения и вращения
-        ox = float(re.search(r"origin\s+x=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+x=", line_lower) else 0.0
-        oy = float(re.search(r"origin\s+y=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+y=", line_lower) else 0.0
-        oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"origin\s+z=", line_lower) else 0.0
-        
-        # Угол rotate a1=...
-        angle = float(re.search(r"rotate\s+a1=([-+]?\d*\.\d+|\d+)", line_lower).group(1)) if re.search(r"rotate\s+a1=", line_lower) else 0.0
-
-        if "cuboid" in line_lower:
-            process_cuboid(numbers, ox, oy, oz, angle)
+        if "cuboid" in line_lower and "unit" not in line_lower:
+            ox, oy, oz = get_origin(line_lower)
+            add_cuboid_coords(numbers, ox, oy, oz)
             
         elif "hole" in line_lower:
-            # Формат: hole H_ID Origin x=... y=... z=...
             hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_id_match:
                 h_id = int(hole_id_match.group(1))
+                ox, oy, oz = get_origin(line_lower)
+                
                 if h_id in units:
-                    # Проходим по внутренностям юнита, который вызван как hole
                     for u_line in units[h_id]:
                         u_line_lower = u_line.lower()
                         u_numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", u_line_lower)]
                         if "cuboid" in u_line_lower:
-                            process_cuboid(u_numbers, ox, oy, oz, angle)
+                            add_cuboid_coords(u_numbers, ox, oy, oz)
 
-    return sorted(list(x_coords)), sorted(list(y_coords)), sorted(list(z_coords))
+    return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_geometry_advanced(geo_text)
+    x_s, y_s, z_s = parse_scale_v2(geo_text)
     
     if not x_s and not y_s and not z_s:
-        st.warning("⚠️ Не удалось распознать геометрию. Проверьте синтаксис тел.")
+        st.warning("Не удалось распознать геометрию. Убедитесь, что вставили описание юнитов вместе с их телами.")
     else:
-        result = "read gridGeometry\n"
-        if x_s: result += f"  xgrid = {' '.join(map(str, x_s))}\n"
-        if y_s: result += f"  ygrid = {' '.join(map(str, y_s))}\n"
-        if z_s: result += f"  zgrid = {' '.join(map(str, z_s))}\n"
-        result += "end gridGeometry"
+        result = "    gridGeometry 2\n"
         
-        st.subheader("Сгенерированный блок:")
+        if x_s:
+            result += f"        xlinear {len(x_s)} {x_s} {x_s[-1]}\n"
+            result += f"             xplanes {' '.join(map(str, x_s))} end\n"
+        if y_s:
+            result += f"        ylinear {len(y_s)} {y_s} {y_s[-1]}\n"
+            result += f"             yplanes {' '.join(map(str, y_s))} end\n"
+        if z_s:
+            result += f"        zlinear {len(z_s)} {z_s} {z_s[-1]}\n"
+            result += f"             zplanes {' '.join(map(str, z_s))} end\n"
+            
+        result += "    end gridGeometry"
+        
+        st.subheader("Результат:")
         st.code(result, language="text")
