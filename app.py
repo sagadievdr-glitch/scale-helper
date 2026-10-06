@@ -7,26 +7,26 @@ st.title("Помощник SCALE: Из Geometry в GridGeometry")
 placeholder_text = (
     "read geometry\n"
     "global unit 1\n"
-    "  cylinder 1 43.0 106.15 0.0\n"
-    "  hole 2 Origin x=3.5\n"
-    "unit 2\n"
-    "  cylinder 7 3.0 57.6 30.0\n"
+    "  cuboid 1000 5000 0.0 2600 0.0 830.0 -470.0\n"
+    "  hole 6 Origin x=1241 y=340 z=420\n"
+    "unit 6\n"
+    "  cuboid 1 10 0 60 0 200 0\n"
     "end geometry"
 )
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_standing_cylinders(text):
+def parse_scale_verified_final(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
+    # Исправленный поиск параметров осей: ищем число строго после знака равенства
     def get_axis_val(line_str, prefix):
-        # Поиск параметров смещения с учетом знаков плюс и минус
         match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
         return float(match.group(1)) if match else None
 
-    # Шаг 1. Очистка от комментариев, блоков media и спецификатора boundary
+    # Шаг 1. Очистка от комментариев и блоков media
     cleaned_lines = []
     for line in text.split('\n'):
         if "'" in line:
@@ -34,10 +34,10 @@ def parse_scale_standing_cylinders(text):
         if "media" in line.lower():
             line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)[0]
         line_strip = line.strip()
-        if line_strip and not line_strip.lower().startswith("boundary"):
+        if line_strip:
             cleaned_lines.append(line_strip)
 
-    # Шаг 2. Распил текста на блоки юнитов
+    # Шаг 2. Распил текста на blocks юнитов и глобальную часть
     global_lines = []
     unit_blocks = {}
     current_unit_id = None
@@ -61,38 +61,41 @@ def parse_scale_standing_cylinders(text):
 
     def get_clean_numbers(line_str):
         parts = re.split(r"origin|rotate", line_str, re.IGNORECASE)
-        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts)]
+        return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts[0])]
 
-    # Математика расчета кубоидов, сфер и стоячих цилиндров с точностью до сотых
-    def add_cuboid(nums, tx, ty, tz):
-        coords = nums[1:] if len(nums) >= 7 else nums
-        if len(coords) >= 6:
-            x_coords.update([round(coords[0] + tx, 2), round(coords[1] + tx, 2)])
-            y_coords.update([round(coords[2] + ty, 2), round(coords[3] + ty, 2)])
-            z_coords.update([round(coords[4] + tz, 2), round(coords[5] + tz, 2)])
-
-    def add_cylinder(nums, tx, ty, tz):
-        # Вертикальный цилиндр (ось Z): ID, радиус, Z_max, Z_min
-        if len(nums) >= 4:
-            r = nums[1]
-            z_max = nums[2]
-            z_min = nums[3]
+    def process_shape(shape_type, nums, h_ox, h_oy, h_oz, l_ox, l_oy, l_oz):
+        # Суммируем смещения от hole и локального origin
+        total_x = h_ox + l_ox
+        total_y = h_oy + l_oy
+        total_z = h_oz + l_oz
+        
+        if shape_type == 'cuboid' and len(nums) >= 7:
+            coords = nums[1:] # берем все числа после ID материала до самого конца
+            if len(coords) >= 6:
+                x_coords.update([round(coords[0] + total_x, 2), round(coords[1] + total_x, 2)])
+                y_coords.update([round(coords[2] + total_y, 2), round(coords[3] + total_y, 2)])
+                z_coords.update([round(coords[4] + total_z, 2), round(coords[5] + total_z, 2)])
             
-            # Радиус симметрично определяет границы по X и Y от центра
-            x_coords.update([round(tx + r, 2), round(tx - r, 2)])
-            y_coords.update([round(ty + r, 2), round(ty - r, 2)])
-            # Высоты цилиндра идут строго в Z
-            z_coords.update([round(z_max + tz, 2), round(z_min + tz, 2)])
-
-    def add_sphere(nums, tx, ty, tz):
-        if len(nums) >= 2:
+        elif shape_type == 'cylinder' and len(nums) >= 4:
+            # Если чисел 4, первое — это ID цилиндра. Берём параметры со 2-го числа.
+            r, h_max, h_min = nums[1], nums[2], nums[3]
+            
+            # Цилиндры стоят вертикально (ось Z): радиус расходится в X и Y, высоты — в Z
+            x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
+            y_coords.update([round(total_y + r, 2), round(total_y - r, 2)])
+            z_coords.update([round(h_max + total_z, 2), round(h_min + total_z, 2)])
+                
+        elif shape_type == 'sphere' and len(nums) >= 2:
+            # Первое число — ID сферы, второе — радиус
             r = nums[1]
-            x_coords.update([round(tx + r, 2), round(tx - r, 2)])
-            y_coords.update([round(ty + r, 2), round(ty - r, 2)])
-            z_coords.update([round(tz + r, 2), round(tz - r, 2)])
+            x_coords.update([round(total_x + r, 2), round(total_x - r, 2)])
+            y_coords.update([round(total_y + r, 2), round(total_y - r, 2)])
+            z_coords.update([round(total_z + r, 2), round(total_z - r, 2)])
 
-    def parse_line_elements(line, h_ox, h_oy, h_oz):
+    # Шаг 3. Обработка глобальных линий и раскрытие hole
+    for line in global_lines:
         line_lower = line.lower()
+        
         val_x = get_axis_val(line_lower, 'x')
         val_y = get_axis_val(line_lower, 'y')
         val_z = get_axis_val(line_lower, 'z')
@@ -101,34 +104,43 @@ def parse_scale_standing_cylinders(text):
         l_oy = val_y if val_y is not None else 0.0
         l_oz = val_z if val_z is not None else 0.0
         
-        tx, ty, tz = h_ox + l_ox, h_oy + l_oy, h_oz + l_oz
         nums = get_clean_numbers(line)
         
-        if not nums:
-            return
-
         if "cuboid" in line_lower:
-            add_cuboid(nums, tx, ty, tz)
+            process_shape('cuboid', nums, 0, 0, 0, l_ox, l_oy, l_oz)
         elif "cylinder" in line_lower:
-            add_cylinder(nums, tx, ty, tz)
+            process_shape('cylinder', nums, 0, 0, 0, l_ox, l_oy, l_oz)
         elif "sphere" in line_lower:
-            add_sphere(nums, tx, ty, tz)
+            process_shape('sphere', nums, 0, 0, 0, l_ox, l_oy, l_oz)
+            
         elif "hole" in line_lower:
             hole_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_match:
                 h_id = int(hole_match.group(1))
                 if h_id in unit_blocks:
                     for u_line in unit_blocks[h_id]:
-                        parse_line_elements(u_line, tx, ty, tz)
-
-    # Шаг 3. Запуск анализа геометрии
-    for line in global_lines:
-        parse_line_elements(line, 0, 0, 0)
+                        u_line_lower = u_line.lower()
+                        
+                        u_val_x = get_axis_val(u_line_lower, 'x')
+                        u_val_y = get_axis_val(u_line_lower, 'y')
+                        u_val_z = get_axis_val(u_line_lower, 'z')
+                        
+                        loc_ox = u_val_x if u_val_x is not None else 0.0
+                        loc_oy = u_val_y if u_val_y is not None else 0.0
+                        loc_oz = u_val_z if u_val_z is not None else 0.0
+                        
+                        u_nums = get_clean_numbers(u_line)
+                        if "cuboid" in u_line_lower:
+                            process_shape('cuboid', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
+                        elif "cylinder" in u_line_lower:
+                            process_shape('cylinder', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
+                        elif "sphere" in u_line_lower:
+                            process_shape('sphere', u_nums, l_ox, l_oy, l_oz, loc_ox, loc_oy, loc_oz)
 
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_standing_cylinders(geo_text)
+    x_s, y_s, z_s = parse_scale_verified_final(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
