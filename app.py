@@ -16,7 +16,7 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_precise_shapes_v4(text):
+def parse_scale_precise_shapes_v5(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
@@ -25,16 +25,25 @@ def parse_scale_precise_shapes_v4(text):
         match = re.search(r"\b" + prefix + r"\s*=\s*([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE)
         return float(match.group(1)) if match else None
 
-    # Шаг 1. Очистка от комментариев и блоков media
+    # Шаг 1. Очистка от комментариев, блоков media и boundary
     cleaned_lines = []
     for line in text.split('\n'):
+        # Отрезаем комментарии после кавычки
         if "'" in line:
-            line = line.split("'")
-        if "media" in line.lower():
-            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)
-        line_strip = line.strip()
-        if line_strip:
-            cleaned_lines.append(line_strip)
+            line = line.split("'")[0]
+            
+        line_str = line.strip()
+        line_lower = line_str.lower()
+        
+        if not line_str or "read geometry" in line_lower or "end geometry" in line_lower or line_lower.startswith("boundary"):
+            continue
+            
+        # Намертво вырезаем ключевое слово media и всё, что идет после него
+        if "media" in line_lower:
+            line_str = re.split(r"\bmedia\b", line_str, flags=re.IGNORECASE)[0].strip()
+            
+        if line_str:
+            cleaned_lines.append(line_str)
 
     # Шаг 2. Распил текста на блоки юнитов
     global_lines = []
@@ -43,9 +52,6 @@ def parse_scale_precise_shapes_v4(text):
 
     for line in cleaned_lines:
         line_lower = line.lower()
-        if "read geometry" in line_lower or "end geometry" in line_lower:
-            continue
-            
         if "unit" in line_lower and "global" not in line_lower:
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
@@ -62,7 +68,6 @@ def parse_scale_precise_shapes_v4(text):
         parts = re.split(r"origin|rotate", line_str, re.IGNORECASE)
         return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts)]
 
-    # Ошибка исправлена: везде используется строго переменная nums
     def add_cuboid(nums, tx, ty, tz):
         coords = nums[1:] if len(nums) >= 7 else nums
         if len(coords) >= 6:
@@ -129,7 +134,7 @@ def parse_scale_precise_shapes_v4(text):
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_precise_shapes_v4(geo_text)
+    x_s, y_s, z_s = parse_scale_precise_shapes_v5(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
