@@ -16,7 +16,7 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_precise_shapes(text):
+def parse_scale_precise_shapes_v4(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
@@ -29,9 +29,9 @@ def parse_scale_precise_shapes(text):
     cleaned_lines = []
     for line in text.split('\n'):
         if "'" in line:
-            line = line.split("'")[0]
+            line = line.split("'")
         if "media" in line.lower():
-            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)[0]
+            line = re.split(r"\bmedia\b", line, flags=re.IGNORECASE)
         line_strip = line.strip()
         if line_strip:
             cleaned_lines.append(line_strip)
@@ -62,9 +62,9 @@ def parse_scale_precise_shapes(text):
         parts = re.split(r"origin|rotate", line_str, re.IGNORECASE)
         return [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", parts)]
 
-    # Точность расчетов изменена до сотых долей (round(..., 2))
+    # Ошибка исправлена: везде используется строго переменная nums
     def add_cuboid(nums, tx, ty, tz):
-        coords = nums[1:] if len(nums) >= 7 else numbers
+        coords = nums[1:] if len(nums) >= 7 else nums
         if len(coords) >= 6:
             x_coords.update([round(coords[0] + tx, 2), round(coords[1] + tx, 2)])
             y_coords.update([round(coords[2] + ty, 2), round(coords[3] + ty, 2)])
@@ -76,7 +76,7 @@ def parse_scale_precise_shapes(text):
             h_max = nums[2]
             h_min = nums[3]
             
-            if not is_x and not is_y: # Ось Z
+            if not is_x and not is_y: # Цилиндр вдоль оси Z
                 x_coords.update([round(tx + r, 2), round(tx - r, 2)])
                 y_coords.update([round(ty + r, 2), round(ty - r, 2)])
                 z_coords.update([round(h_max + tz, 2), round(h_min + tz, 2)])
@@ -129,7 +129,7 @@ def parse_scale_precise_shapes(text):
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_precise_shapes(geo_text)
+    x_s, y_s, z_s = parse_scale_precise_shapes_v4(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
@@ -148,4 +148,3 @@ if geo_text:
         
         st.subheader("Результат:")
         st.code(result, language="text")
-
