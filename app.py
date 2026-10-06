@@ -16,14 +16,14 @@ placeholder_text = (
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_fixed_offsets(text):
+def parse_scale_strict_clean(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
     
     lines = text.split('\n')
     
-    unit_bodies = {}  # {unit_id_int: [список элементов]}
+    unit_bodies = {}
     global_elements = []
     current_unit = None
     
@@ -33,7 +33,7 @@ def parse_scale_fixed_offsets(text):
         oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+z=", line_str, re.IGNORECASE) else 0.0
         return ox, oy, oz
 
-    # Шаг 1: Первичный сбор данных (заполняем базу юнитов)
+    # Шаг 1: Сбор данных
     for line in lines:
         line_clean = line.strip()
         line_lower = line_clean.lower()
@@ -44,7 +44,7 @@ def parse_scale_fixed_offsets(text):
         if line_lower.startswith("unit"):
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
-                current_unit = nums[0]  # Извлекаем как число, а не список
+                current_unit = nums[0]
                 if current_unit not in unit_bodies:
                     unit_bodies[current_unit] = []
             continue
@@ -52,15 +52,20 @@ def parse_scale_fixed_offsets(text):
             current_unit = None
             continue
             
-        numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", line_lower)]
-        
         if "cuboid" in line_lower:
-            ox, oy, oz = extract_origin(line_lower)
-            if current_unit is not None:
-                unit_bodies[current_unit].append(('cuboid', numbers, (ox, oy, oz)))
-            else:
-                global_elements.append(('cuboid', numbers, (ox, oy, oz)))
-                
+            # Извлекаем числа ИМЕННО из части до ключевых слов rotate/origin, чтобы не путать их с параметрами сдвига
+            clean_body = re.split(r"origin|rotate", line_lower)[0]
+            numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", clean_body)]
+            
+            # СТРОГОЕ ПРАВИЛО: первое число — это ID кубоида, мы его полностью отбрасываем!
+            if len(numbers) >= 7:
+                coords_only = numbers[1:] # Отрезаем ID
+                ox, oy, oz = extract_origin(line_lower)
+                if current_unit is not None:
+                    unit_bodies[current_unit].append(('cuboid', coords_only, (ox, oy, oz)))
+                else:
+                    global_elements.append(('cuboid', coords_only, (ox, oy, oz)))
+                    
         elif "hole" in line_lower:
             hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_id_match:
@@ -71,22 +76,22 @@ def parse_scale_fixed_offsets(text):
                 else:
                     global_elements.append(('hole', h_id, (ox, oy, oz)))
 
-    def add_cuboid_coords(numbers, total_ox, total_oy, total_oz):
-        if len(numbers) < 7:
+    def add_cuboid_coords(coords, total_ox, total_oy, total_oz):
+        # Здесь на входе уже чистые 6 координат: X_max X_min Y_max Y_min Z_max Z_min
+        if len(coords) < 6:
             return
-        # SCALE cuboid: ID +X -X +Y -Y +Z -Z
-        x_max = numbers[1] + total_ox
-        x_min = numbers[2] + total_ox
-        y_max = numbers[3] + total_oy
-        y_min = numbers[4] + total_oy
-        z_max = numbers[5] + total_oz
-        z_min = numbers[6] + total_oz
+        x_max = coords[0] + total_ox
+        x_min = coords[1] + total_ox
+        y_max = coords[2] + total_oy
+        y_min = coords[3] + total_oy
+        z_max = coords[4] + total_oz
+        z_min = coords[5] + total_oz
         
         x_coords.update([round(x_max, 1), round(x_min, 1)])
         y_coords.update([round(y_max, 1), round(y_min, 1)])
         z_coords.update([round(z_max, 1), round(z_min, 1)])
 
-    # Шаг 2: Рекурсивная функция раскрытия юнитов
+    # Шаг 2: Рекурсивный обход по иерархии
     def process_unit(u_id, accumulated_origin=(0.0, 0.0, 0.0)):
         if u_id not in unit_bodies:
             return
@@ -104,26 +109,23 @@ def parse_scale_fixed_offsets(text):
             elif item_type == 'hole':
                 process_unit(data, (total_ox, total_oy, total_oz))
 
-    # Шаг 3: Запуск сборки координат строго по иерархии
-    # Обрабатываем глобальные элементы, если они объявлены вне юнитов
+    # Шаг 3: Запуск расчета
     for item_type, data, local_orig in global_elements:
         if item_type == 'cuboid':
             add_cuboid_coords(data, local_orig[0], local_orig[1], local_orig[2])
         elif item_type == 'hole':
             process_unit(data, local_orig)
             
-    # Запускаем расчет от главного юнита (обычно это unit 1 в SCALE)
     if 1 in unit_bodies:
         process_unit(1)
     elif unit_bodies:
-        # Если unit 1 нет, берем первый попавшийся объявленный юнит в качестве корневого
         first_unit = list(unit_bodies.keys())[0]
         process_unit(first_unit)
 
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_fixed_offsets(geo_text)
+    x_s, y_s, z_s = parse_scale_strict_clean(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
@@ -144,4 +146,3 @@ if geo_text:
         
         st.subheader("Результат:")
         st.code(result, language="text")
-
