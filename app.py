@@ -6,17 +6,17 @@ st.title("Помощник SCALE: Из Geometry в GridGeometry")
 
 placeholder_text = (
     "read geometry\n"
-    "unit 1\n"
-    "  cuboid 102 135.4 0 383.5 0 151 0 origin x=151 y=781\n"
-    "  hole 6 Origin x=646 y=100\n"
-    "unit 6\n"
-    "  cuboid 1 60 0 200 0 10 0\n"
+    "global unit 1\n"
+    "  cuboid 1000 5000 0.0 2600 0.0 830.0 -470.0\n"
+    "  hole 2 Origin x=656 y=270\n"
+    "unit 2\n"
+    "  cuboid 5 2991.7 0.3 354 347 199.7 80\n"
     "end geometry"
 )
 
 geo_text = st.text_area("Вставьте блок geometry сюда:", height=300, placeholder=placeholder_text)
 
-def parse_scale_strict_clean(text):
+def parse_scale_perfect(text):
     x_coords = set()
     y_coords = set()
     z_coords = set()
@@ -25,6 +25,9 @@ def parse_scale_strict_clean(text):
     
     unit_bodies = {}
     global_elements = []
+    
+    # Ищем ключевой корневой юнит (в вашем файле это global unit 1)
+    root_unit_id = 1 
     current_unit = None
     
     def extract_origin(line_str):
@@ -33,39 +36,43 @@ def parse_scale_strict_clean(text):
         oz = float(re.search(r"origin\s+z=([-+]?\d*\.\d+|\d+)", line_str, re.IGNORECASE).group(1)) if re.search(r"origin\s+z=", line_str, re.IGNORECASE) else 0.0
         return ox, oy, oz
 
-    # Шаг 1: Сбор данных
+    # Шаг 1: Сбор всей базы геометрии по юнитам
     for line in lines:
         line_clean = line.strip()
         line_lower = line_clean.lower()
         
+        # Полностью игнорируем пустые строки и комментарии
         if not line_clean or line_clean.startswith("'") or "read geometry" in line_lower or "end geometry" in line_lower:
             continue
             
-        if line_lower.startswith("unit"):
+        # Фиксируем переключение юнитов
+        if "unit" in line_lower:
             nums = [int(n) for n in re.findall(r"\d+", line_lower)]
             if nums:
-                current_unit = nums[0]
+                current_unit = nums[-1] # Запоминаем ID юнита
+                if "global" in line_lower:
+                    root_unit_id = current_unit
                 if current_unit not in unit_bodies:
                     unit_bodies[current_unit] = []
             continue
-        elif line_lower.startswith("end") and "geometry" not in line_lower:
+        elif line_lower.startswith("end ") and "geometry" not in line_lower:
             current_unit = None
             continue
             
+        # Парсим только кубоиды
         if "cuboid" in line_lower:
-            # Извлекаем числа ИМЕННО из части до ключевых слов rotate/origin, чтобы не путать их с параметрами сдвига
             clean_body = re.split(r"origin|rotate", line_lower)[0]
             numbers = [float(n) for n in re.findall(r"[-+]?\d*\.\d+|\d+", clean_body)]
             
-            # СТРОГОЕ ПРАВИЛО: первое число — это ID кубоида, мы его полностью отбрасываем!
             if len(numbers) >= 7:
-                coords_only = numbers[1:] # Отрезаем ID
+                coords_only = numbers[1:] # Отбрасываем ID материала/тела
                 ox, oy, oz = extract_origin(line_lower)
                 if current_unit is not None:
                     unit_bodies[current_unit].append(('cuboid', coords_only, (ox, oy, oz)))
                 else:
                     global_elements.append(('cuboid', coords_only, (ox, oy, oz)))
                     
+        # Парсим вызовы hole
         elif "hole" in line_lower:
             hole_id_match = re.search(r"hole\s+(\d+)", line_lower)
             if hole_id_match:
@@ -77,9 +84,9 @@ def parse_scale_strict_clean(text):
                     global_elements.append(('hole', h_id, (ox, oy, oz)))
 
     def add_cuboid_coords(coords, total_ox, total_oy, total_oz):
-        # Здесь на входе уже чистые 6 координат: X_max X_min Y_max Y_min Z_max Z_min
         if len(coords) < 6:
             return
+        # Сдвигаем локальные координаты на накопленный глобальный коэффициент смещения
         x_max = coords[0] + total_ox
         x_min = coords[1] + total_ox
         y_max = coords[2] + total_oy
@@ -91,7 +98,7 @@ def parse_scale_strict_clean(text):
         y_coords.update([round(y_max, 1), round(y_min, 1)])
         z_coords.update([round(z_max, 1), round(z_min, 1)])
 
-    # Шаг 2: Рекурсивный обход по иерархии
+    # Шаг 2: Рекурсивный упорядоченный обход дерева юнитов
     def process_unit(u_id, accumulated_origin=(0.0, 0.0, 0.0)):
         if u_id not in unit_bodies:
             return
@@ -109,23 +116,20 @@ def parse_scale_strict_clean(text):
             elif item_type == 'hole':
                 process_unit(data, (total_ox, total_oy, total_oz))
 
-    # Шаг 3: Запуск расчета
+    # Шаг 3: Сборка геометрии строго от корневого юнита
     for item_type, data, local_orig in global_elements:
         if item_type == 'cuboid':
             add_cuboid_coords(data, local_orig[0], local_orig[1], local_orig[2])
         elif item_type == 'hole':
             process_unit(data, local_orig)
             
-    if 1 in unit_bodies:
-        process_unit(1)
-    elif unit_bodies:
-        first_unit = list(unit_bodies.keys())[0]
-        process_unit(first_unit)
+    if root_unit_id in unit_bodies:
+        process_unit(root_unit_id)
 
     return sorted(list(x_coords), reverse=True), sorted(list(y_coords), reverse=True), sorted(list(z_coords), reverse=True)
 
 if geo_text:
-    x_s, y_s, z_s = parse_scale_strict_clean(geo_text)
+    x_s, y_s, z_s = parse_scale_perfect(geo_text)
     
     if not x_s and not y_s and not z_s:
         st.warning("Не удалось извлечь координаты. Проверьте формат блока geometry.")
